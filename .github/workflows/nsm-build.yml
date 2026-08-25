@@ -1,0 +1,64 @@
+# nsm-build: build the patched CLIProxyAPI (X-Auth-Subset subset routing) and
+# push it to GHCR as nsm-llmproxy. Tag scheme follows the workbench repo's
+# P-011 convention: ts-<UTC14>-<sha40> is lexically ordered by time so a
+# Lexical-strategy watcher (e.g. Kargo Warehouse) always selects the newest
+# build; sha-<sha40> and nsm-main are kept as auxiliary tags.
+name: nsm-build
+
+on:
+  push:
+    branches: [nsm-main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Go vet and test
+        run: |
+          go vet ./sdk/cliproxy/auth/... ./internal/config/... ./internal/api/...
+          go test ./sdk/cliproxy/auth/... ./internal/config/...
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set ts tag (P-011 convention)
+        run: echo "TS=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            VERSION=nsm-${{ env.TS }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.TS }}
+          push: true
+          tags: |
+            ghcr.io/niuyuping/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}
+            ghcr.io/niuyuping/nsm-llmproxy:sha-${{ github.sha }}
+            ghcr.io/niuyuping/nsm-llmproxy:nsm-main
+          cache-from: type=gha,scope=nsm-llmproxy
+          cache-to: type=gha,mode=max,scope=nsm-llmproxy
+      - name: Report image digest
+        run: |
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "ghcr.io/niuyuping/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "digest: ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
