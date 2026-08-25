@@ -13,6 +13,8 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write   # cosign keyless signing (GitHub OIDC) — required by the
+                    # cluster's Kyverno verify-ghcr-image-signatures policy.
 
 jobs:
   test:
@@ -57,6 +59,9 @@ jobs:
             ghcr.io/niuyuping/nsm-llmproxy:nsm-main
           cache-from: type=gha,scope=nsm-llmproxy
           cache-to: type=gha,mode=max,scope=nsm-llmproxy
+      - uses: sigstore/cosign-installer@v3
+      - name: Cosign keyless sign (policy identity = this workflow @ nsm-main)
+        run: cosign sign --yes ghcr.io/niuyuping/nsm-llmproxy@${{ steps.build.outputs.digest }}
       - name: Report image digest
         run: |
           echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
