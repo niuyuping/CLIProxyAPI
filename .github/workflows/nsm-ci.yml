@@ -1,0 +1,62 @@
+# nsm-llmproxy 産線化（2026-08-27・移管収尾 §10「新規」）：全系で唯一 CI 産線を
+# 持たなかった鏡像の産線化。従来は手動 build/push で、org 移管時に「org 側に署名済
+# 実体が無い」実弾を踏んだ（kyverno 験簽が手動複製を拒否し platform-prod が OutOfSync 固着）。
+#
+# 生効条件（順序）：
+#   1. 本仓を org（Makit-WorkBench-Group）へ移管する——GITHUB_TOKEN が org GHCR へ
+#      書けるのは org 仓としての実行時だけ（個人仓のままでは push が 403 で落ちる）。
+#   2. deploy 仓 products/policy/ghcr-verify.yaml の attestor へ本 workflow の subject
+#      （…/<移管後の仓名>/.github/workflows/nsm-ci.yml@refs/heads/main）を登記する。
+#   3. 初回発布後、deploy 仓の pin 再翻転と kargo 購読の org 化を行う。
+#
+# tag 形式は ts-<UTC14 桁>-<sha40>（P-011-A：字典序＝時間序——kargo Warehouse の
+# Lexical 選定が乱れないための全系共通形）。上游の docker-image.yml（DockerHub 向け）とは
+# 独立に併存する——上游同期で消えない別名 nsm-ci.yml とした。
+name: nsm-ci
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write   # cosign keyless 署名（GitHub OIDC）
+
+env:
+  IMAGE: ghcr.io/makit-workbench-group/nsm-llmproxy
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: ビルドメタデータ（ts- タグ）
+        run: |
+          echo "TS=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Build and push（amd64+arm64——集群は Apple Silicon 上の VM のため arm64 必須）
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=ts-${{ env.TS }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+          tags: |
+            ${{ env.IMAGE }}:main
+            ${{ env.IMAGE }}:ts-${{ env.TS }}-${{ github.sha }}
+      - uses: sigstore/cosign-installer@v3
+      - name: cosign keyless 署名（digest 錨——tag 差替に強い）
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
