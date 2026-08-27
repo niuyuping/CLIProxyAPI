@@ -55,16 +55,16 @@ jobs:
             BUILD_DATE=${{ env.TS }}
           push: true
           tags: |
-            ghcr.io/niuyuping/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}
-            ghcr.io/niuyuping/nsm-llmproxy:sha-${{ github.sha }}
-            ghcr.io/niuyuping/nsm-llmproxy:nsm-main
+            ghcr.io/makit-workbench-group/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}
+            ghcr.io/makit-workbench-group/nsm-llmproxy:sha-${{ github.sha }}
+            ghcr.io/makit-workbench-group/nsm-llmproxy:nsm-main
           cache-from: type=gha,scope=nsm-llmproxy
           cache-to: type=gha,mode=max,scope=nsm-llmproxy
       - uses: sigstore/cosign-installer@v3
       - name: Cosign keyless sign (policy identity = this workflow @ nsm-main)
-        run: cosign sign --yes ghcr.io/niuyuping/nsm-llmproxy@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes ghcr.io/makit-workbench-group/nsm-llmproxy@${{ steps.build.outputs.digest }}
       - name: Report image digest
         run: |
           echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          echo "ghcr.io/niuyuping/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/makit-workbench-group/nsm-llmproxy:ts-${{ env.TS }}-${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "digest: ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
