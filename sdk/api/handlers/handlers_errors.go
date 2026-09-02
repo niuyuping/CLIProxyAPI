@@ -10,9 +10,74 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
+
+// requestedModelContextKey stores the client-requested model on the gin context so that
+// logErrorResponse can name it even when the failure happened before any executor ran
+// (model routing, auth selection, request validation).
+const requestedModelContextKey = "API_REQUESTED_MODEL"
+
+// maxLoggedErrorReasonLength caps the reason text emitted by logErrorResponse so that a
+// large upstream error body cannot flood the access log.
+const maxLoggedErrorReasonLength = 512
+
+// rememberRequestedModel records the model the client asked for on the gin context
+// carried by ctx. It is a no-op when ctx does not carry a gin context.
+func rememberRequestedModel(ctx context.Context, model string) {
+	if ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	if model = strings.TrimSpace(model); model != "" {
+		ginCtx.Set(requestedModelContextKey, model)
+	}
+}
+
+func requestedModelForLog(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if value, ok := c.Get(requestedModelContextKey); ok {
+		if model, isString := value.(string); isString {
+			return model
+		}
+	}
+	return ""
+}
+
+// logErrorResponse emits one log line explaining every error status written back to the
+// client. The gin access log only carries status/latency/path, so a 400 answered in 1ms
+// was previously indistinguishable from any other 400; this line adds the request id,
+// the requested model and the error text (truncated) without needing request-log.
+func logErrorResponse(c *gin.Context, status int, reason string) {
+	if c == nil || c.Request == nil || status < http.StatusBadRequest {
+		return
+	}
+	reason = strings.Join(strings.Fields(reason), " ")
+	if reason == "" {
+		reason = http.StatusText(status)
+	}
+	if len(reason) > maxLoggedErrorReasonLength {
+		reason = reason[:maxLoggedErrorReasonLength] + "...(truncated)"
+	}
+	requestID := logging.GetGinRequestID(c)
+	if requestID == "" {
+		requestID = "--------"
+	}
+	path := ""
+	if c.Request.URL != nil {
+		path = c.Request.URL.Path
+	}
+	log.WithField("request_id", requestID).Warnf("api error response: status=%d method=%s path=%s model=%s reason=%s",
+		status, c.Request.Method, path, requestedModelForLog(c), reason)
+}
 
 func statusFromError(err error) int {
 	return clienterror.HTTPStatusFromError(err)
@@ -109,6 +174,8 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 		}
 	}
 
+	logErrorResponse(c, status, errText)
+
 	body := BuildErrorResponseBody(status, errText)
 	// Append first to preserve upstream response logs, then drop duplicate payloads if already recorded.
 	var previous []byte
@@ -145,6 +212,7 @@ func writeDirectErrorResponse(c *gin.Context, status int, msg *interfaces.ErrorM
 		}
 	}
 	body := bytes.Clone(msg.Body)
+	logErrorResponse(c, status, string(body))
 	appendAPIResponse(c, body)
 	if !c.Writer.Written() && c.Writer.Header().Get("Content-Type") == "" {
 		c.Writer.Header().Set("Content-Type", "application/json")
